@@ -25,7 +25,7 @@ jobs:
       run: go build -o ./dist/sip-ban
 
     - name: 📂 Sync files
-      uses: hujiulong/action-qiniu-upload@master
+      uses: hocgin/action-qiniu-upload@master
       with:
         access_key: ${{ secrets.QINIU_ACCESS_KEY }}
         secret_key: ${{ secrets.QINIU_SECRET_KEY }}
