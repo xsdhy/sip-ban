@@ -22,7 +22,7 @@ jobs:
         go-version: 1.18
 
     - name: Build
-      run: go build ./dist/sip-ban
+      run: go build -o ./dist/sip-ban
 
     - name: 📂 Sync files
       uses: hujiulong/action-qiniu-upload@master
