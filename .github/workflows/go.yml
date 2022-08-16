@@ -34,3 +34,12 @@ jobs:
         exclude: |
           **/*.go
           **/*.go/**
+          **/.git*
+          **/.git*/**
+          **/.idea*
+          **/.idea*/**
+          **/.github*
+          **/.github*/**
+          **/pkg/**
+          go.mod
+          Makefile
