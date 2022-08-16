@@ -18,9 +18,16 @@ import (
 var (
 	variableCache *cache.Cache
 	deviceName    = ""
+	protocol      = "udp"
 	filterPort    = 5060
 	banRule       map[string]*BanRule
+	banRuleCode   map[int]*BanRule
+
+	ipt *iptables.IPTables
 )
+
+const DIRECTION_IN = "IN"
+const DIRECTION_OUT = "OUT"
 
 type BanRule struct {
 	FindTime int
@@ -28,9 +35,18 @@ type BanRule struct {
 }
 
 func main() {
+	var err error
+	//初始化Iptables
+	ipt, err = iptables.New()
+	if err != nil {
+		fmt.Println("启动错误Iptables:", err.Error())
+		return
+	}
+
 	wg := &sync.WaitGroup{}
 
 	banRule = map[string]*BanRule{}
+	banRuleCode = map[int]*BanRule{}
 	banRule[layers.SIPMethodInvite.String()] = &BanRule{
 		FindTime: 120,
 		MaxRetry: 30,
@@ -39,14 +55,18 @@ func main() {
 		FindTime: 120,
 		MaxRetry: 40,
 	}
+	banRuleCode[403] = banRule[layers.SIPMethodInvite.String()]
+	banRuleCode[401] = banRule[layers.SIPMethodRegister.String()]
 
 	flag.StringVar(&deviceName, "i", "", "网卡")
-	flag.IntVar(&filterPort, "p", 5060, "端口号")
+	flag.StringVar(&protocol, "p", "udp", "协议")
+	flag.IntVar(&filterPort, "P", 5060, "端口号")
+
 	flag.IntVar(&banRule[layers.SIPMethodRegister.String()].FindTime, "rt", 120, "Register-FindTime")
 	flag.IntVar(&banRule[layers.SIPMethodRegister.String()].MaxRetry, "rn", 40, "Register-MaxRetry")
 	flag.IntVar(&banRule[layers.SIPMethodInvite.String()].FindTime, "it", 120, "Invite-FindTime")
 	flag.IntVar(&banRule[layers.SIPMethodInvite.String()].MaxRetry, "in", 30, "Invite-MaxRetry")
-
+	flag.Parse()
 	//初始化缓存
 	variableCache = cache.New(5*time.Minute, 10*time.Minute)
 
@@ -79,7 +99,7 @@ func findAllDevice(wg *sync.WaitGroup) {
 }
 
 func captureDevice(deviceName string, deviceIp string) {
-	fmt.Println(fmt.Sprintf("开始捕获:%s %s", deviceName, deviceIp))
+	fmt.Println(fmt.Sprintf("开始捕获:%s %s %s %d", deviceName, deviceIp, protocol, filterPort))
 	var handle *pcap.Handle
 
 	var err error
@@ -89,7 +109,7 @@ func captureDevice(deviceName string, deviceIp string) {
 	}
 	defer handle.Close()
 
-	err = handle.SetBPFFilter(fmt.Sprintf("port %d", filterPort))
+	err = handle.SetBPFFilter(fmt.Sprintf("%s and port %d", protocol, filterPort))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -112,9 +132,9 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 		return
 	}
 	if deviceIp == ip.SrcIP.String() {
-		direction = "in"
+		direction = DIRECTION_OUT
 	} else if deviceIp == ip.DstIP.String() {
-		direction = "out"
+		direction = DIRECTION_IN
 	} else {
 		direction = ""
 	}
@@ -122,8 +142,8 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	var srcPort uint16
 	var dstPort uint16
 
-	switch ip.Protocol {
-	case layers.IPProtocolTCP:
+	switch protocol {
+	case "tcp":
 		tcpLayer := packet.Layer(layers.LayerTypeTCP)
 		if tcpLayer == nil {
 			return
@@ -135,7 +155,7 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 		}
 		srcPort = uint16(tcp.SrcPort)
 		dstPort = uint16(tcp.DstPort)
-	case layers.IPProtocolUDP:
+	case "udp":
 		udpLayer := packet.Layer(layers.LayerTypeUDP)
 		if udpLayer == nil {
 			return
@@ -148,51 +168,71 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 		dstPort = uint16(udp.DstPort)
 	}
 
-	sipLayer := packet.Layer(layers.LayerTypeSIP)
-	if sipLayer == nil {
+	//应用层
+	appLayer := packet.ApplicationLayer()
+	if appLayer == nil {
 		return
 	}
-	sip, ok := sipLayer.(*layers.SIP)
-	if !ok {
-		return
-	}
-
-	fmt.Printf("%s %s(%s) %s %s-%s From %s:%d To %s:%d %s %d %s\n",
-		time.Now().Format("2006-01-02 15:04:05"),
-		deviceName,
-		deviceIp,
-		direction,
-		ip.Protocol,
-		sip.Method,
-		ip.SrcIP, srcPort,
-		ip.DstIP, dstPort,
-		sip.GetCallID(),
-		sip.ResponseCode,
-		sip.ResponseStatus,
-	)
-
-	key := fmt.Sprintf("%s-%s:%d", sip.Method, ip.SrcIP, srcPort)
-
-	//获取规则
-	rule := banRule[sip.Method.String()]
-	if rule == nil {
-		return
-	}
-	//尝试增加次数
-	incrementInt, _ := variableCache.IncrementInt(key, 1)
-	if incrementInt <= 0 {
-		variableCache.Set(key, 1, time.Duration(rule.FindTime)*time.Millisecond)
-	} else if incrementInt > rule.MaxRetry {
-		//todo::封禁
-		//ban(ip.SrcIP.String())
-	}
-}
-
-func ban(ip string) {
-	ipt, err := iptables.New()
+	sip := &SipPackage{}
+	err := sip.DecodeFromBytes(appLayer.Payload())
 	if err != nil {
 		return
 	}
-	rule := fmt.Sprintf("-s %s -p all --dport %s -j REJECT", ip, filterPort)
-	_ = ipt.Append("filter", "INPUT", rule)
+
+	fmt.Printf("%s %s %s %s:%d->%s:%d %s %s(%d)\n",
+		time.Now().Format("2006-01-02 15:04:05"),
+		deviceName,
+		direction,
+		ip.SrcIP, srcPort,
+		ip.DstIP, dstPort,
+		ip.Protocol,
+		sip.ResponseStatus,
+		sip.ResponseCode,
+	)
+
+	if direction == DIRECTION_IN {
+		return
+	}
+
+	key := fmt.Sprintf("%s.%d", ip.DstIP, sip.ResponseCode)
+
+	//获取规则
+	rule := banRuleCode[sip.ResponseCode]
+	if rule == nil {
+		return
+	}
+
+	incrementInt := 0
+	_, b := variableCache.Get(key)
+	if b {
+		incrementInt, _ = variableCache.IncrementInt(key, 1)
+	} else {
+		_ = variableCache.Add(key, 1, time.Duration(rule.FindTime)*time.Millisecond)
+	}
+	if incrementInt > rule.MaxRetry {
+		//ban(ip.SrcIP.String())
+		fmt.Println("Ban", ip.DstIP.String(), "Times", incrementInt)
+	}
+
+	//fmt.Printf("%s %s %s %s:%d->%s:%d %s %s(%d) Rule %d-%d Key %s:%d\n",
+	//	time.Now().Format("2006-01-02 15:04:05"),
+	//	deviceName,
+	//	direction,
+	//	ip.SrcIP, srcPort,
+	//	ip.DstIP, dstPort,
+	//	ip.Protocol,
+	//	sip.ResponseStatus,
+	//	sip.ResponseCode,
+	//	rule.FindTime,
+	//	rule.MaxRetry,
+	//	key,
+	//	incrementInt,
+	//)
+}
+
+func ban(ip string) {
+	rule := fmt.Sprintf("-s %s -p %s --dport %d -j REJECT", ip, protocol, filterPort)
+	err := ipt.Append("filter", "INPUT", rule)
+
+	fmt.Println(err.Error())
 }
