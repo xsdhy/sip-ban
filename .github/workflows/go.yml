@@ -22,24 +22,14 @@ jobs:
         go-version: 1.18
 
     - name: Build
-      run: go build sip-ban
+      run: go build ./dist/sip-ban
 
     - name: 📂 Sync files
-      uses: SamKirkland/FTP-Deploy-Action@4.3.0
+      uses: hujiulong/action-qiniu-upload@master
       with:
-        server: ${{ secrets.FTP_SERVER }}
-        username: ${{ secrets.FTP_USERNAME }}
-        password: ${{ secrets.FTP_PASSWORD }}
-        server-dir: ./files/
-        exclude: |
-          **/*.go
-          **/*.go/**
-          **/.git*
-          **/.git*/**
-          **/.idea*
-          **/.idea*/**
-          **/.github*
-          **/.github*/**
-          **/pkg/**
-          go.mod
-          Makefile
+        access_key: ${{ secrets.QINIU_ACCESS_KEY }}
+        secret_key: ${{ secrets.QINIU_SECRET_KEY }}
+        bucket: ${{ secrets.QINIU_BUCKET }}
+        source_dir: 'dist'
+        dest_dir: '/files/sip_ban/'
+        ignore_source_map: true
