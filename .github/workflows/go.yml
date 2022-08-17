@@ -23,13 +23,3 @@ jobs:
 
     - name: Build
       run: go build -o ./dist/sip-ban
-
-    - name: 📂 Sync files
-      uses: hocgin/action-qiniu-upload@master
-      with:
-        access_key: ${{ secrets.QINIU_ACCESS_KEY }}
-        secret_key: ${{ secrets.QINIU_SECRET_KEY }}
-        bucket: ${{ secrets.QINIU_BUCKET }}
-        source_dir: 'dist'
-        dest_dir: '/files/sip_ban/'
-        ignore_source_map: true

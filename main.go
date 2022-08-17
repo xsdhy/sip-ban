@@ -40,7 +40,7 @@ func main() {
 	ipt, err = iptables.New()
 	if err != nil {
 		fmt.Println("启动错误Iptables:", err.Error())
-		return
+		//return
 	}
 
 	wg := &sync.WaitGroup{}
@@ -167,6 +167,13 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 		srcPort = uint16(udp.SrcPort)
 		dstPort = uint16(udp.DstPort)
 	}
+	logBase := fmt.Sprintf("%s %s %s %s:%d->%s:%d %s",
+		time.Now().Format("2006-01-02 15:04:05"),
+		deviceName,
+		direction,
+		ip.SrcIP, srcPort,
+		ip.DstIP, dstPort,
+		ip.Protocol)
 
 	//应用层
 	appLayer := packet.ApplicationLayer()
@@ -174,23 +181,20 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 		return
 	}
 	sip := &SipPackage{}
-	err := sip.DecodeFromBytes(appLayer.Payload())
+	err := sip.DecodeFromBytes(appLayer.LayerContents())
 	if err != nil {
+		fmt.Printf("NotSip %s \n", logBase)
 		return
 	}
-
-	fmt.Printf("%s %s %s %s:%d->%s:%d %s %s(%d)\n",
-		time.Now().Format("2006-01-02 15:04:05"),
-		deviceName,
-		direction,
-		ip.SrcIP, srcPort,
-		ip.DstIP, dstPort,
-		ip.Protocol,
+	logSip := fmt.Sprintf("%s %s %s(%d)",
+		sip.GetCallID(),
+		sip.Method,
 		sip.ResponseStatus,
 		sip.ResponseCode,
 	)
 
 	if direction == DIRECTION_IN {
+		fmt.Printf("DIRECTION %s %s\n", logBase, logSip)
 		return
 	}
 
@@ -199,6 +203,7 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	//获取规则
 	rule := banRuleCode[sip.ResponseCode]
 	if rule == nil {
+		fmt.Printf("NotRule %s %s \n", logBase, logSip)
 		return
 	}
 
@@ -209,30 +214,33 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	} else {
 		_ = variableCache.Add(key, 1, time.Duration(rule.FindTime)*time.Millisecond)
 	}
+
+	logRule := fmt.Sprintf("Rule %d-%d Key %s:%d",
+		rule.FindTime,
+		rule.MaxRetry,
+		key,
+		incrementInt,
+	)
+
 	if incrementInt > rule.MaxRetry {
+		fmt.Printf("BAN %s %s %s \n", logBase, logSip, logRule)
 		//ban(ip.SrcIP.String())
-		fmt.Println("Ban", ip.DstIP.String(), "Times", incrementInt)
+	} else {
+		fmt.Printf("Normal %s %s %s \n", logBase, logSip, logRule)
 	}
 
-	//fmt.Printf("%s %s %s %s:%d->%s:%d %s %s(%d) Rule %d-%d Key %s:%d\n",
-	//	time.Now().Format("2006-01-02 15:04:05"),
-	//	deviceName,
-	//	direction,
-	//	ip.SrcIP, srcPort,
-	//	ip.DstIP, dstPort,
-	//	ip.Protocol,
-	//	sip.ResponseStatus,
-	//	sip.ResponseCode,
-	//	rule.FindTime,
-	//	rule.MaxRetry,
-	//	key,
-	//	incrementInt,
-	//)
 }
 
 func ban(ip string) {
+	if ipt == nil {
+		return
+	}
 	rule := fmt.Sprintf("-s %s -p %s --dport %d -j REJECT", ip, protocol, filterPort)
-	err := ipt.Append("filter", "INPUT", rule)
-
-	fmt.Println(err.Error())
+	exists, err := ipt.Exists("filter", "INPUT", rule)
+	if err != nil || exists {
+		fmt.Println(rule, err.Error(), exists)
+		return
+	}
+	err = ipt.Append("filter", "INPUT", rule)
+	fmt.Println(rule, err.Error())
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -23,6 +24,9 @@ type SipPackage struct {
 }
 
 func (sip *SipPackage) DecodeFromBytes(data []byte) error {
+	if len(data) <= 0 {
+		return errors.New("空消息")
+	}
 	sip.Headers = make(map[string]string)
 	// Init some vars for parsing follow-up
 	var countLines int
@@ -56,6 +60,7 @@ func (sip *SipPackage) DecodeFromBytes(data []byte) error {
 		// Other lines are headers
 		if countLines == 0 {
 			splits := strings.SplitN(string(line), " ", 3)
+
 			if len(splits) < 3 {
 				return err
 			}
@@ -76,6 +81,9 @@ func (sip *SipPackage) DecodeFromBytes(data []byte) error {
 			sip.ParseHeader(line)
 		}
 		countLines++
+	}
+	if len(sip.GetCallID()) <= 0 {
+		return errors.New("不是标准的sip消息")
 	}
 	return nil
 }
