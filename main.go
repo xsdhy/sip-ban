@@ -58,6 +58,7 @@ func main() {
 		FindTime: 120,
 		MaxRetry: 40,
 	}
+	banRuleCode[407] = banRule[layers.SIPMethodInvite.String()]
 	banRuleCode[403] = banRule[layers.SIPMethodInvite.String()]
 	banRuleCode[401] = banRule[layers.SIPMethodRegister.String()]
 
@@ -188,7 +189,7 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	sip := &SipPackage{}
 	err := sip.DecodeFromBytes(appLayer.LayerContents())
 	if err != nil {
-		fmt.Printf("NotSip %s \n", logBase)
+		//fmt.Printf("NotSip %s \n", logBase)
 		return
 	}
 	logSip := fmt.Sprintf("%s\t%s\t%s.%d",
@@ -208,7 +209,7 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	//获取规则
 	rule := banRuleCode[sip.ResponseCode]
 	if rule == nil {
-		fmt.Printf("NoRule %s\t%s \n", logBase, logSip)
+		//fmt.Printf("NoRule %s\t%s \n", logBase, logSip)
 		return
 	}
 
@@ -217,7 +218,7 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	if b {
 		incrementInt, _ = variableCache.IncrementInt(key, 1)
 	} else {
-		err = variableCache.Add(key, 1, time.Duration(rule.FindTime)*time.Millisecond)
+		err = variableCache.Add(key, 1, time.Duration(rule.FindTime)*time.Second)
 		if err != nil {
 			fmt.Printf("ERROR SET CACHE %s\t%s\n", logBase, err.Error())
 		} else {
