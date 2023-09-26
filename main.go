@@ -207,17 +207,24 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	)
 
 	if direction == DIRECTION_IN {
-		//检查是不是国内IP
-		strategy, countryName := checkIpInCN(ip.SrcIP.String())
-		if !strategy {
-			color.Red(fmt.Sprintf("BAN___ %s\t%s\t%s \n", logBase, logSip, countryName))
-		}
-
 		//fmt.Printf("IGNORE %s\t%s\n", logBase, logSip)
 		return
 	}
 
+	//之所以要在出的方向判断是因为防止多次重复添加
+	//检查是不是国内IP
+	strategy, countryName := checkIpInCN(ip.DstIP.String())
+	if !strategy {
+		color.Red(fmt.Sprintf("BAN___ %s\t%s\t%s \n", logBase, logSip, countryName))
+		ban(ip.DstIP.String())
+	}
+
 	key := fmt.Sprintf("%s.%d", ip.DstIP, sip.ResponseCode)
+
+	if key != "" {
+		//注意，这里不再执行后续流程，暂时只开启国家识别
+		return
+	}
 
 	//获取规则
 	rule := banRuleCode[sip.ResponseCode]
