@@ -5,7 +5,11 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="840a1c0a-fbf9-4456-9ad1-d0e5eaf1dbea" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/ipv4.ipdb" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/go.mod" beforeDir="false" afterPath="$PROJECT_DIR$/go.mod" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/go.sum" beforeDir="false" afterPath="$PROJECT_DIR$/go.sum" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/main.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -60,7 +64,7 @@
       <recent name="$PROJECT_DIR$/pkg" />
     </key>
   </component>
-  <component name="RunManager" selected="Makefile Target.build">
+  <component name="RunManager" selected="Go Test.Test_checkIp in sip-ban">
     <configuration default="true" type="GoApplicationRunConfiguration" factoryName="Go Application">
       <module name="sip-ban" />
       <working_directory value="$PROJECT_DIR$" />
@@ -87,6 +91,17 @@
       <filePath value="$PROJECT_DIR$/main.go" />
       <method v="2" />
     </configuration>
+    <configuration name="Test_checkIp in sip-ban" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+      <module name="sip-ban" />
+      <working_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="sip-ban" />
+      <directory value="$PROJECT_DIR$" />
+      <filePath value="$PROJECT_DIR$" />
+      <framework value="gotest" />
+      <pattern value="^\QTest_checkIp\E$" />
+      <method v="2" />
+    </configuration>
     <configuration default="true" type="GoTestRunConfiguration" factoryName="Go Test">
       <module name="sip-ban" />
       <working_directory value="$PROJECT_DIR$" />
@@ -110,6 +125,7 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Go Test.Test_checkIp in sip-ban" />
         <item itemvalue="Makefile Target.build" />
         <item itemvalue="Go Build.go build sip-ban" />
         <item itemvalue="Go Build.go build attack-ban" />

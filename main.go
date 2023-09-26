@@ -11,6 +11,7 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
+	"github.com/ipipdotnet/ipdb-go"
 	"github.com/patrickmn/go-cache"
 
 	"sip-ban/pkg/iptables"
@@ -42,6 +43,12 @@ func main() {
 	if err != nil {
 		fmt.Println("启动错误Iptables:", err.Error())
 		//return
+	}
+
+	//初始化IP库
+	IPDB, err = ipdb.NewCity("./ipv4.ipdb")
+	if err != nil {
+		fmt.Println("加载ipdb错误:", err.Error())
 	}
 
 	wg := &sync.WaitGroup{}
@@ -200,6 +207,12 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	)
 
 	if direction == DIRECTION_IN {
+		//检查是不是国内IP
+		strategy, countryName := checkIpInCN(ip.SrcIP.String())
+		if !strategy {
+			color.Red(fmt.Sprintf("BAN___ %s\t%s\t%s \n", logBase, logSip, countryName))
+		}
+
 		//fmt.Printf("IGNORE %s\t%s\n", logBase, logSip)
 		return
 	}
