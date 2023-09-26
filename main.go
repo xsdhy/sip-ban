@@ -199,7 +199,7 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	)
 
 	if direction == DIRECTION_IN {
-		fmt.Printf("IGNORE %s\t%s\n", logBase, logSip)
+		//fmt.Printf("IGNORE %s\t%s\n", logBase, logSip)
 		return
 	}
 
@@ -217,7 +217,10 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	if b {
 		incrementInt, _ = variableCache.IncrementInt(key, 1)
 	} else {
-		_ = variableCache.Add(key, 1, time.Duration(rule.FindTime)*time.Millisecond)
+		err = variableCache.Add(key, 1, time.Duration(rule.FindTime)*time.Millisecond)
+		if err != nil {
+			fmt.Printf("ERROR SET CACHE %s\t%s\n", logBase, err.Error())
+		}
 	}
 
 	logRule := fmt.Sprintf("Rule:%d-%d Key:%s Times:%d",
