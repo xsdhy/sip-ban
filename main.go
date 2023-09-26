@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"os/exec"
 	"sync"
 	"time"
 
@@ -217,7 +216,7 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	strategy, countryName := checkIpInCN(ip.DstIP.String())
 	if !strategy {
 		color.Red(fmt.Sprintf("BAN___ %s\t%s\t%s \n", logBase, logSip, countryName))
-		ban2(ip.DstIP.String())
+		ban(ip.DstIP.String())
 	}
 
 	key := fmt.Sprintf("%s.%d", ip.DstIP, sip.ResponseCode)
@@ -263,32 +262,21 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 
 }
 
-func ban2(ip string) {
-	if ipt == nil {
-		return
-	}
-	//iptables -I INPUT -s 66.94.127.156 -j DROP
-	cmd := exec.Command(fmt.Sprintf("bash", "-c", "iptables -I INPUT -s %s -j DROP", ip))
-
-	err := cmd.Run()
-	if err != nil {
-		fmt.Println(fmt.Sprintf("BAN IP ERROR %s:%s", ip, err.Error()))
-	} else {
-		fmt.Println(fmt.Sprintf("BAN IP SUCCESS %s", ip))
-	}
-}
-
 func ban(ip string) {
 	if ipt == nil {
 		return
 	}
 	//iptables -I INPUT -s 66.94.127.156 -j DROP
-	rule := fmt.Sprintf("-s %s -p %s --dport %d -j DROP", ip, protocol, filterPort)
-	exists, err := ipt.Exists("filter", "INPUT", rule)
+	rule := []string{"-s", ip, "-j", "DROP"}
+	exists, err := ipt.Exists("filter", "INPUT", rule...)
 	if err != nil || exists {
-		fmt.Println(rule, err.Error(), exists)
+		fmt.Println("BAN IP exists", ip, err.Error(), exists)
 		return
 	}
-	err = ipt.Append("filter", "INPUT", rule)
-	fmt.Println(rule, err.Error())
+	err = ipt.Append("filter", "INPUT", rule...)
+	if err != nil {
+		fmt.Println(fmt.Sprintf("BAN IP ERROR %s:%s", ip, err.Error()))
+	} else {
+		fmt.Println(fmt.Sprintf("BAN IP SUCCESS %s", ip))
+	}
 }
