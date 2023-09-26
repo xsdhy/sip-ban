@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
@@ -47,6 +48,8 @@ func main() {
 
 	banRule = map[string]*BanRule{}
 	banRuleCode = map[int]*BanRule{}
+
+	//如果120s内发起过30次
 	banRule[layers.SIPMethodInvite.String()] = &BanRule{
 		FindTime: 120,
 		MaxRetry: 30,
@@ -91,6 +94,7 @@ func findAllDevice(wg *sync.WaitGroup) {
 					break
 				}
 				wg.Add(1)
+
 				go captureDevice(device.Name, address.IP.String())
 				break
 			}
@@ -120,6 +124,7 @@ func captureDevice(deviceName string, deviceIp string) {
 	}
 }
 
+// analysisPacket 分析一个具体的包
 func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) {
 	var direction string
 	ipLayer := packet.Layer(layers.LayerTypeIPv4)
@@ -167,13 +172,13 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 		srcPort = uint16(udp.SrcPort)
 		dstPort = uint16(udp.DstPort)
 	}
-	logBase := fmt.Sprintf("%s %s %s %s:%d->%s:%d %s",
+	logBase := fmt.Sprintf("%s %s\t%s-%s %s:%d->%s:%d",
 		time.Now().Format("2006-01-02 15:04:05"),
 		deviceName,
+		ip.Protocol,
 		direction,
 		ip.SrcIP, srcPort,
-		ip.DstIP, dstPort,
-		ip.Protocol)
+		ip.DstIP, dstPort)
 
 	//应用层
 	appLayer := packet.ApplicationLayer()
@@ -186,7 +191,7 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 		fmt.Printf("NotSip %s \n", logBase)
 		return
 	}
-	logSip := fmt.Sprintf("%s %s %s(%d)",
+	logSip := fmt.Sprintf("%s\t%s\t%s.%d",
 		sip.GetCallID(),
 		sip.Method,
 		sip.ResponseStatus,
@@ -194,7 +199,7 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	)
 
 	if direction == DIRECTION_IN {
-		fmt.Printf("DIRECTION %s %s\n", logBase, logSip)
+		fmt.Printf("IGNORE %s\t%s\n", logBase, logSip)
 		return
 	}
 
@@ -203,7 +208,7 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	//获取规则
 	rule := banRuleCode[sip.ResponseCode]
 	if rule == nil {
-		fmt.Printf("NotRule %s %s \n", logBase, logSip)
+		fmt.Printf("NoRule %s\t%s \n", logBase, logSip)
 		return
 	}
 
@@ -215,7 +220,7 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 		_ = variableCache.Add(key, 1, time.Duration(rule.FindTime)*time.Millisecond)
 	}
 
-	logRule := fmt.Sprintf("Rule %d-%d Key %s:%d",
+	logRule := fmt.Sprintf("Rule:%d-%d Key:%s Times:%d",
 		rule.FindTime,
 		rule.MaxRetry,
 		key,
@@ -223,10 +228,10 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	)
 
 	if incrementInt > rule.MaxRetry {
-		fmt.Printf("BAN %s %s %s \n", logBase, logSip, logRule)
+		color.Red(fmt.Sprintf("BAN___ %s\t%s\t%s \n", logBase, logSip, logRule))
 		//ban(ip.SrcIP.String())
 	} else {
-		fmt.Printf("Normal %s %s %s \n", logBase, logSip, logRule)
+		color.Blue(fmt.Sprintf("Normal %s\t%s\t%s \n", logBase, logSip, logRule))
 	}
 
 }
@@ -235,7 +240,8 @@ func ban(ip string) {
 	if ipt == nil {
 		return
 	}
-	rule := fmt.Sprintf("-s %s -p %s --dport %d -j REJECT", ip, protocol, filterPort)
+	//iptables -I INPUT -s 66.94.127.156 -j DROP
+	rule := fmt.Sprintf("-s %s -p %s --dport %d -j DROP", ip, protocol, filterPort)
 	exists, err := ipt.Exists("filter", "INPUT", rule)
 	if err != nil || exists {
 		fmt.Println(rule, err.Error(), exists)

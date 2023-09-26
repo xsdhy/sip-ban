@@ -7,19 +7,22 @@ on:
     branches: [ "main" ]
 
 jobs:
-
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-
-    - name: Install pCap
-      run: sudo apt update && sudo apt install -y libpcap-dev
-
-    - name: Set up Go
-      uses: actions/setup-go@v3
-      with:
-        go-version: 1.18
-
-    - name: Build
-      run: go build -o ./dist/sip-ban
+      - uses: actions/checkout@v3
+      - name: Install pCap
+        run: sudo apt update && sudo apt install -y libpcap-dev
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.20
+      - name: Build
+        run: go build -o ./dist/sip-ban
+      - name: Release
+          uses: softprops/action-gh-release@v1
+          with:
+            tag_name: vtest
+            name: sip-ban
+            files: |
+              ./dist/sip-ban
