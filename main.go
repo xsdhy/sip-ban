@@ -270,7 +270,6 @@ func ban(ip string) {
 	rule := []string{"-s", ip, "-j", "DROP"}
 	exists, err := ipt.Exists("filter", "INPUT", rule...)
 	if err != nil || exists {
-		fmt.Println("BAN IP exists", ip, err.Error(), exists)
 		return
 	}
 	err = ipt.Append("filter", "INPUT", rule...)
