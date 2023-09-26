@@ -51,8 +51,8 @@ func main() {
 
 	//如果120s内发起过30次
 	banRule[layers.SIPMethodInvite.String()] = &BanRule{
-		FindTime: 120,
-		MaxRetry: 30,
+		FindTime: 60,
+		MaxRetry: 10,
 	}
 	banRule[layers.SIPMethodRegister.String()] = &BanRule{
 		FindTime: 120,
@@ -220,9 +220,9 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	} else {
 		err = variableCache.Add(key, 1, time.Duration(rule.FindTime)*time.Second)
 		if err != nil {
-			fmt.Printf("ERROR SET CACHE %s\t%s\n", logBase, err.Error())
+			fmt.Printf("ERROR SET CACHE %s\t%s%s\n", logBase, key, err.Error())
 		} else {
-			fmt.Printf("SET CACHE START %s\t\n", logBase)
+			fmt.Printf("SET CACHE START %s\t%s %d\n", logBase, key, rule.FindTime)
 		}
 	}
 
