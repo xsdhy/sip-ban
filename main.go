@@ -268,7 +268,7 @@ func ban2(ip string) {
 		return
 	}
 	//iptables -I INPUT -s 66.94.127.156 -j DROP
-	cmd := exec.Command(fmt.Sprintf("iptables -I INPUT -s %s -j DROP", ip))
+	cmd := exec.Command(fmt.Sprintf("bash", "-c", "iptables -I INPUT -s %s -j DROP", ip))
 
 	err := cmd.Run()
 	if err != nil {
