@@ -220,6 +220,8 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 		err = variableCache.Add(key, 1, time.Duration(rule.FindTime)*time.Millisecond)
 		if err != nil {
 			fmt.Printf("ERROR SET CACHE %s\t%s\n", logBase, err.Error())
+		} else {
+			fmt.Printf("SET CACHE START %s\t\n", logBase)
 		}
 	}
 
