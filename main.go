@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -216,7 +217,7 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 	strategy, countryName := checkIpInCN(ip.DstIP.String())
 	if !strategy {
 		color.Red(fmt.Sprintf("BAN___ %s\t%s\t%s \n", logBase, logSip, countryName))
-		ban(ip.DstIP.String())
+		ban2(ip.DstIP.String())
 	}
 
 	key := fmt.Sprintf("%s.%d", ip.DstIP, sip.ResponseCode)
@@ -260,6 +261,21 @@ func analysisPacket(deviceName string, deviceIp string, packet gopacket.Packet) 
 		color.Blue(fmt.Sprintf("Normal %s\t%s\t%s \n", logBase, logSip, logRule))
 	}
 
+}
+
+func ban2(ip string) {
+	if ipt == nil {
+		return
+	}
+	//iptables -I INPUT -s 66.94.127.156 -j DROP
+	cmd := exec.Command(fmt.Sprintf("iptables -I INPUT -s %s -j DROP", ip))
+
+	err := cmd.Run()
+	if err != nil {
+		fmt.Println(fmt.Sprintf("BAN IP ERROR %s:%s", ip, err.Error()))
+	} else {
+		fmt.Println(fmt.Sprintf("BAN IP SUCCESS %s", ip))
+	}
 }
 
 func ban(ip string) {
