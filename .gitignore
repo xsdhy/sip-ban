@@ -1,3 +1,28 @@
-.idea
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
 .DS_Store
-ipv4.ipdb
+
+# Data files
+data/*.ipdb
+!data/.gitkeep
+
+# Logs
+*.log
