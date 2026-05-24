@@ -30,6 +30,15 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
+      - name: Verify source files
+        run: |
+          echo "Checking cmd/sip-ban directory:"
+          ls -la cmd/sip-ban/
+          echo "Checking Go files:"
+          find cmd/sip-ban -name "*.go" -type f
+          echo "Verifying package declarations:"
+          grep "^package" cmd/sip-ban/*.go
+
       - name: Build binary
         env:
           GOOS: ${{ matrix.goos }}
@@ -41,7 +50,8 @@ jobs:
             export CC=aarch64-linux-gnu-gcc
           fi
           mkdir -p dist
-          go build -ldflags "-s -w -X main.Version=${{ steps.version.outputs.VERSION }}" \
+          go clean -cache
+          go build -a -ldflags "-s -w -X main.Version=${{ steps.version.outputs.VERSION }}" \
             -o dist/sip-ban-${{ matrix.goos }}-${{ matrix.goarch }} \
             ./cmd/sip-ban
 
