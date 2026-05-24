@@ -1,6 +1,6 @@
 # Binaries
 bin/
-sip-ban
+/sip-ban
 *.exe
 *.exe~
 *.dll
