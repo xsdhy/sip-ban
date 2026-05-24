@@ -1,138 +1,131 @@
-// Package main SIP-Ban主程序入口
-// 用于监控SIP流量并自动封禁恶意IP
+// Package main SIP-Ban主程序入口。
+//
+// 入口职责（需求 §5）：
+//  1. 如果当前进程是 daemon 子进程（SIPBAN_DAEMONIZED=1），先执行
+//     daemon.Activate（抢锁 / 注册信号 / 向父进程汇报 ok）然后跑业务逻辑。
+//  2. 否则按 dispatch 规则分派到前台 / start / status / stop / restart。
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
-	"log"
-	"sync"
+	"os"
+	"os/signal"
+	"syscall"
 
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/pcap"
-
-	"sip-ban/internal/analyzer"
 	"sip-ban/internal/config"
-	"sip-ban/internal/firewall"
-	"sip-ban/internal/geoip"
-	"sip-ban/internal/sip"
+	"sip-ban/internal/daemon"
 )
 
-// main 主函数，程序入口点
+// main 主入口。
 func main() {
-	// 加载配置
-	cfg := config.Load()
-
-	// 初始化防火墙管理器
-	fw, err := firewall.New()
-	if err != nil {
-		fmt.Printf("警告: Iptables初始化失败: %s\n", err)
+	// daemon 子进程：先 Activate 再跑业务，与父子命令分发解耦。
+	if daemon.IsChildProcess() {
+		runDaemonChild()
+		return
 	}
 
-	// 初始化IP地理位置检查器
-	geoChecker, err := geoip.New(cfg.IPDBPath)
-	if err != nil {
-		fmt.Printf("警告: IP数据库加载失败: %s\n", err)
-	}
-
-	// 配置基于SIP方法的封禁规则
-	banRules := map[string]*analyzer.BanRule{
-		sip.MethodInvite.String(): {
-			FindTime: cfg.InviteFindTime,
-			MaxRetry: cfg.InviteMaxRetry,
-		},
-		sip.MethodRegister.String(): {
-			FindTime: cfg.RegisterFindTime,
-			MaxRetry: cfg.RegisterMaxRetry,
-		},
-	}
-
-	// 配置基于响应码的封禁规则
-	// 407: Proxy Authentication Required
-	// 403: Forbidden
-	// 401: Unauthorized
-	banRuleCodes := map[int]*analyzer.BanRule{
-		407: banRules[sip.MethodInvite.String()],
-		403: banRules[sip.MethodInvite.String()],
-		401: banRules[sip.MethodRegister.String()],
-	}
-
-	// 启动网络包捕获
-	wg := &sync.WaitGroup{}
-	startCapture(cfg, geoChecker, fw, banRules, banRuleCodes, wg)
-	wg.Wait()
-}
-
-// startCapture 扫描网卡并启动流量捕获
-// 参数:
-//   cfg - 配置对象
-//   geoChecker - IP地理位置检查器
-//   fw - 防火墙管理器
-//   banRules - 基于SIP方法的封禁规则
-//   banRuleCodes - 基于响应码的封禁规则
-//   wg - 等待组，用于协程同步
-func startCapture(cfg *config.Config, geoChecker *geoip.Checker, fw *firewall.Manager, banRules map[string]*analyzer.BanRule, banRuleCodes map[int]*analyzer.BanRule, wg *sync.WaitGroup) {
-	devices, err := pcap.FindAllDevs()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// 遍历所有网卡设备
-	for _, device := range devices {
-		if len(device.Addresses) == 0 {
-			continue
-		}
-
-		// 查找IPv4地址
-		for _, address := range device.Addresses {
-			if address.IP.To4() != nil {
-				// 如果指定了网卡名称，则只处理该网卡
-				if cfg.DeviceName != "" && device.Name != cfg.DeviceName {
-					break
-				}
-				// 为每个网卡启动一个协程进行捕获
-				wg.Add(1)
-				go captureDevice(cfg, device.Name, address.IP.String(), geoChecker, fw, banRules, banRuleCodes, wg)
-				break
-			}
-		}
+	cmd := dispatch(os.Args)
+	switch cmd.name {
+	case "":
+		runForegroundCLI(cmd.args)
+	case "start":
+		runStart(cmd.args)
+	case "status":
+		runStatus(cmd.args)
+	case "stop":
+		runStop(cmd.args)
+	case "restart":
+		runRestart(cmd.args)
+	case "?":
+		fallthrough
+	default:
+		printUsageAndExit(daemon.ExitUserError)
 	}
 }
 
-// captureDevice 在指定网卡上捕获和分析流量
-// 参数:
-//   cfg - 配置对象
-//   deviceName - 网卡名称
-//   deviceIP - 网卡IP地址
-//   geoChecker - IP地理位置检查器
-//   fw - 防火墙管理器
-//   banRules - 基于SIP方法的封禁规则
-//   banRuleCodes - 基于响应码的封禁规则
-//   wg - 等待组
-func captureDevice(cfg *config.Config, deviceName, deviceIP string, geoChecker *geoip.Checker, fw *firewall.Manager, banRules map[string]*analyzer.BanRule, banRuleCodes map[int]*analyzer.BanRule, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	fmt.Printf("开始捕获: %s %s %s %d\n", deviceName, deviceIP, cfg.Protocol, cfg.FilterPort)
-
-	// 打开网卡进行实时捕获
-	// 参数: 设备名, 快照长度, 混杂模式, 超时时间
-	handle, err := pcap.OpenLive(deviceName, 1024, false, pcap.BlockForever)
+// runForegroundCLI 旧 CLI 风格的前台入口。
+//
+// 接受全部旧参数（-i / -P / -p / -rt 等），不接受 daemon 相关 flag。
+// 与 §5 派发规则 1 / 2 对应。
+func runForegroundCLI(args []string) {
+	fs := flag.NewFlagSet("sip-ban", flag.ExitOnError)
+	cfg, err := config.LoadFromFlagSet(fs, args)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(daemon.ExitUserError)
 	}
-	defer handle.Close()
+	if err := runForeground(context.Background(), cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(daemon.ExitSystemError)
+	}
+}
 
-	// 设置BPF过滤器，只捕获指定协议和端口的流量
-	if err := handle.SetBPFFilter(fmt.Sprintf("%s and port %d", cfg.Protocol, cfg.FilterPort)); err != nil {
-		log.Fatal(err)
+// runForeground 启动一次完整的前台捕获流程，并在收到 SIGINT/SIGTERM 时优雅退出。
+//
+// 该函数也被 `start`（不带 -d）复用；daemon 子进程走的是 runDaemonChild。
+func runForeground(parent context.Context, cfg *config.Config) error {
+	ctx, cancel := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	return Run(ctx, cfg)
+}
+
+// runDaemonChild 是 daemon 子进程的入口流程。
+//
+// 行为：
+//   1. 读取父进程传入的 PID 文件路径；
+//   2. 重新用 start 子命令的 FlagSet 解析 os.Args[2:]（os.Args[1] 必然为 "start"）；
+//   3. 调用 daemon.Activate 完成抢锁 / 信号注册 / 握手；
+//   4. 调用 Run 进入正常业务流程；
+//   5. 退出前 cleanup。
+//
+// 失败时通过 os.Exit(非 0) 终止——daemon.Activate 已经把 err 经握手管道汇报给父。
+func runDaemonChild() {
+	pidPath, _ := daemon.ChildPaths()
+
+	// 解析子进程参数：os.Args = [exe, "start", ...]
+	// 这里需要剔除 -d、-pid、-log 这三个 daemon 专属 flag，
+	// 让 config.LoadFromFlagSet 能拿到原本的捕获参数。
+	fs := flag.NewFlagSet("start", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	var (
+		dummyD   bool
+		dummyPid string
+		dummyLog string
+	)
+	fs.BoolVar(&dummyD, "d", false, "")
+	fs.StringVar(&dummyPid, "pid", "", "")
+	fs.StringVar(&dummyLog, "log", "", "")
+
+	subArgs := []string{}
+	if len(os.Args) > 1 && os.Args[1] == "start" {
+		subArgs = os.Args[2:]
+	} else if len(os.Args) > 1 {
+		subArgs = os.Args[1:]
 	}
 
-	// 创建流量分析器
-	a := analyzer.New(cfg.Protocol, deviceIP, deviceName, geoChecker, fw, banRules, banRuleCodes)
-	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+	cfg, err := config.LoadFromFlagSet(fs, subArgs)
+	if err != nil {
+		// 父进程通过日志能看到 stderr；同时通过握手管道汇报。
+		hs := os.NewFile(3, "handshake")
+		if hs != nil {
+			fmt.Fprintf(hs, "err: 解析参数失败: %v\n", err)
+			_ = hs.Close()
+		}
+		os.Exit(daemon.ExitSystemError)
+	}
 
-	// 持续处理捕获到的数据包
-	for packet := range packetSource.Packets() {
-		// 每个数据包在独立的协程中分析，提高并发性能
-		go a.AnalyzePacket(packet)
+	ctx, cleanup, err := daemon.Activate(pidPath)
+	if err != nil {
+		// Activate 已经写过 err 到握手管道
+		fmt.Fprintln(os.Stderr, "daemon activate 失败:", err)
+		os.Exit(daemon.ExitSystemError)
+	}
+	defer cleanup()
+
+	if err := Run(ctx, cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(daemon.ExitSystemError)
 	}
 }

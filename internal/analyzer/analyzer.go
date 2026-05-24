@@ -3,6 +3,7 @@ package analyzer
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/fatih/color"
@@ -10,8 +11,6 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/patrickmn/go-cache"
 
-	"sip-ban/internal/firewall"
-	"sip-ban/internal/geoip"
 	"sip-ban/internal/sip"
 )
 
@@ -20,6 +19,16 @@ const (
 	DirectionIn  = "IN"  // 入站流量
 	DirectionOut = "OUT" // 出站流量
 )
+
+// FirewallManager 防火墙管理器接口
+type FirewallManager interface {
+	Ban(ip string) error
+}
+
+// GeoIPChecker IP地理位置检查器接口
+type GeoIPChecker interface {
+	IsChina(ip string) (bool, string)
+}
 
 // BanRule 封禁规则配置
 type BanRule struct {
@@ -30,13 +39,14 @@ type BanRule struct {
 // Analyzer SIP流量分析器
 type Analyzer struct {
 	cache        *cache.Cache          // 缓存，用于记录IP的请求次数
-	geoChecker   *geoip.Checker        // IP地理位置检查器
-	firewall     *firewall.Manager     // 防火墙管理器
+	geoChecker   GeoIPChecker          // IP地理位置检查器
+	firewall     FirewallManager       // 防火墙管理器
 	banRules     map[string]*BanRule   // 基于SIP方法的封禁规则
 	banRuleCode  map[int]*BanRule      // 基于响应码的封禁规则
 	protocol     string                // 协议类型（tcp/udp）
 	deviceIP     string                // 本机设备IP
 	deviceName   string                // 网卡名称
+	bannedIPs    sync.Map              // 已封禁的IP集合，用于去重（key: IP地址, value: 封禁时间）
 }
 
 // New 创建一个新的流量分析器
@@ -50,7 +60,7 @@ type Analyzer struct {
 //   ruleCodes - 基于响应码的封禁规则映射
 // 返回:
 //   *Analyzer - 分析器实例
-func New(protocol, deviceIP, deviceName string, geoChecker *geoip.Checker, fw *firewall.Manager, rules map[string]*BanRule, ruleCodes map[int]*BanRule) *Analyzer {
+func New(protocol, deviceIP, deviceName string, geoChecker GeoIPChecker, fw FirewallManager, rules map[string]*BanRule, ruleCodes map[int]*BanRule) *Analyzer {
 	return &Analyzer{
 		cache:       cache.New(5*time.Minute, 10*time.Minute),
 		geoChecker:  geoChecker,
@@ -233,8 +243,23 @@ func (a *Analyzer) checkBanRules(ip string, responseCode int, logBase, logSip st
 		rule.FindTime, rule.MaxRetry, key, incrementInt)
 
 	if incrementInt > rule.MaxRetry {
-		// 超过最大重试次数，标记为需要封禁
+		// 超过最大重试次数，执行封禁操作
 		color.Red(fmt.Sprintf("BAN___ %s\t%s\t%s\n", logBase, logSip, logRule))
+
+		// 检查是否已经封禁过该IP或已经尝试过封禁（去重）
+		if _, alreadyProcessed := a.bannedIPs.Load(ip); !alreadyProcessed {
+			// 标记为已处理，防止重复尝试（无论成功还是失败）
+			a.bannedIPs.Store(ip, time.Now())
+
+			// 执行封禁操作
+			if a.firewall != nil {
+				if err := a.firewall.Ban(ip); err != nil {
+					fmt.Printf("BAN IP ERROR %s: %s\n", ip, err)
+				} else {
+					fmt.Printf("BAN IP SUCCESS %s\n", ip)
+				}
+			}
+		}
 	} else {
 		// 正常流量
 		color.Blue(fmt.Sprintf("Normal %s\t%s\t%s\n", logBase, logSip, logRule))

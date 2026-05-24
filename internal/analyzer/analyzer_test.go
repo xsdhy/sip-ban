@@ -1,6 +1,8 @@
 package analyzer
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -360,3 +362,407 @@ func TestAnalyzer_CheckBanRules_MaxRetry(t *testing.T) {
 // 2. Mock geoip.Checker和firewall.Manager
 // 3. 集成测试环境
 // 这里只测试了基本的结构和逻辑
+
+// mockFirewall 模拟防火墙管理器，用于测试
+type mockFirewall struct {
+	mu        sync.Mutex
+	bannedIPs []string             // 记录所有被封禁的IP
+	banErrors map[string]error     // 模拟特定IP的封禁错误
+	banCalls  int                  // 记录Ban方法被调用的次数
+}
+
+// Ban 模拟封禁操作
+func (m *mockFirewall) Ban(ip string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.banCalls++
+
+	// 检查是否有预设的错误
+	if err, exists := m.banErrors[ip]; exists {
+		return err
+	}
+
+	// 记录封禁的IP
+	m.bannedIPs = append(m.bannedIPs, ip)
+	return nil
+}
+
+// getBannedIPs 获取所有被封禁的IP列表（线程安全）
+func (m *mockFirewall) getBannedIPs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	result := make([]string, len(m.bannedIPs))
+	copy(result, m.bannedIPs)
+	return result
+}
+
+// getBanCalls 获取Ban方法被调用的次数（线程安全）
+func (m *mockFirewall) getBanCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.banCalls
+}
+
+// TestAnalyzer_CheckBanRules_ActualBan 测试实际执行封禁操作
+func TestAnalyzer_CheckBanRules_ActualBan(t *testing.T) {
+	rule := &BanRule{
+		FindTime: 60,
+		MaxRetry: 3,
+	}
+
+	mockFW := &mockFirewall{
+		bannedIPs: []string{},
+		banErrors: map[string]error{},
+	}
+
+	analyzer := &Analyzer{
+		cache: cache.New(5*time.Minute, 10*time.Minute),
+		banRuleCode: map[int]*BanRule{
+			401: rule,
+		},
+		firewall: mockFW,
+	}
+
+	testIP := "192.168.1.100"
+
+	// 调用多次以超过最大重试次数
+	// MaxRetry=3，所以需要调用5次才能触发封禁（第1次设置为1，后续4次递增到5）
+	for i := 0; i < 5; i++ {
+		analyzer.checkBanRules(testIP, 401, "log", "sip")
+	}
+
+	// 验证IP被封禁
+	bannedIPs := mockFW.getBannedIPs()
+	if len(bannedIPs) != 1 {
+		t.Errorf("应该封禁1个IP，实际封禁了 %d 个", len(bannedIPs))
+	}
+
+	if len(bannedIPs) > 0 && bannedIPs[0] != testIP {
+		t.Errorf("封禁的IP = %v, want %v", bannedIPs[0], testIP)
+	}
+
+	// 验证bannedIPs映射中记录了该IP
+	if _, exists := analyzer.bannedIPs.Load(testIP); !exists {
+		t.Error("bannedIPs映射中应该记录该IP")
+	}
+}
+
+// TestAnalyzer_CheckBanRules_NoDuplicateBan 测试去重机制，防止重复封禁
+func TestAnalyzer_CheckBanRules_NoDuplicateBan(t *testing.T) {
+	rule := &BanRule{
+		FindTime: 60,
+		MaxRetry: 2,
+	}
+
+	mockFW := &mockFirewall{
+		bannedIPs: []string{},
+		banErrors: map[string]error{},
+	}
+
+	analyzer := &Analyzer{
+		cache: cache.New(5*time.Minute, 10*time.Minute),
+		banRuleCode: map[int]*BanRule{
+			401: rule,
+		},
+		firewall: mockFW,
+	}
+
+	testIP := "10.0.0.1"
+
+	// 调用10次，远超过MaxRetry
+	for i := 0; i < 10; i++ {
+		analyzer.checkBanRules(testIP, 401, "log", "sip")
+	}
+
+	// 验证只封禁了一次
+	bannedIPs := mockFW.getBannedIPs()
+	if len(bannedIPs) != 1 {
+		t.Errorf("应该只封禁1次，实际封禁了 %d 次", len(bannedIPs))
+	}
+
+	// 验证Ban方法只被调用了一次
+	banCalls := mockFW.getBanCalls()
+	if banCalls != 1 {
+		t.Errorf("Ban方法应该只被调用1次，实际调用了 %d 次", banCalls)
+	}
+}
+
+// TestAnalyzer_CheckBanRules_BanError 测试封禁失败的情况
+func TestAnalyzer_CheckBanRules_BanError(t *testing.T) {
+	rule := &BanRule{
+		FindTime: 60,
+		MaxRetry: 2,
+	}
+
+	testIP := "172.16.0.1"
+	mockFW := &mockFirewall{
+		bannedIPs: []string{},
+		banErrors: map[string]error{
+			testIP: fmt.Errorf("iptables command failed"),
+		},
+	}
+
+	analyzer := &Analyzer{
+		cache: cache.New(5*time.Minute, 10*time.Minute),
+		banRuleCode: map[int]*BanRule{
+			401: rule,
+		},
+		firewall: mockFW,
+	}
+
+	// 调用多次以触发封禁
+	for i := 0; i < 5; i++ {
+		analyzer.checkBanRules(testIP, 401, "log", "sip")
+	}
+
+	// 验证封禁失败，IP不在bannedIPs列表中
+	bannedIPs := mockFW.getBannedIPs()
+	if len(bannedIPs) != 0 {
+		t.Errorf("封禁失败时不应该记录IP，实际记录了 %d 个", len(bannedIPs))
+	}
+
+	// 验证bannedIPs映射中记录了该IP（标记为已处理，防止重复尝试）
+	if _, exists := analyzer.bannedIPs.Load(testIP); !exists {
+		t.Error("即使封禁失败，bannedIPs映射中也应该记录该IP以防止重复尝试")
+	}
+
+	// 验证Ban方法只被调用了一次（不会重复尝试失败的封禁）
+	banCalls := mockFW.getBanCalls()
+	if banCalls != 1 {
+		t.Errorf("Ban方法应该只被调用1次，实际调用了 %d 次", banCalls)
+	}
+}
+
+// TestAnalyzer_CheckBanRules_NilFirewall 测试firewall为nil的情况
+func TestAnalyzer_CheckBanRules_NilFirewall(t *testing.T) {
+	rule := &BanRule{
+		FindTime: 60,
+		MaxRetry: 2,
+	}
+
+	analyzer := &Analyzer{
+		cache: cache.New(5*time.Minute, 10*time.Minute),
+		banRuleCode: map[int]*BanRule{
+			401: rule,
+		},
+		firewall: nil, // firewall为nil
+	}
+
+	testIP := "192.168.2.1"
+
+	// 调用多次以触发封禁逻辑
+	// 不应该panic，应该优雅地处理
+	for i := 0; i < 5; i++ {
+		analyzer.checkBanRules(testIP, 401, "log", "sip")
+	}
+
+	// 验证不会panic，程序正常运行
+	// 如果到这里没有panic，测试就通过了
+}
+
+// TestAnalyzer_CheckBanRules_MultipleIPs 测试多个IP同时触发封禁
+func TestAnalyzer_CheckBanRules_MultipleIPs(t *testing.T) {
+	rule := &BanRule{
+		FindTime: 60,
+		MaxRetry: 2,
+	}
+
+	mockFW := &mockFirewall{
+		bannedIPs: []string{},
+		banErrors: map[string]error{},
+	}
+
+	analyzer := &Analyzer{
+		cache: cache.New(5*time.Minute, 10*time.Minute),
+		banRuleCode: map[int]*BanRule{
+			401: rule,
+		},
+		firewall: mockFW,
+	}
+
+	testIPs := []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}
+
+	// 每个IP都调用多次以触发封禁
+	for _, ip := range testIPs {
+		for i := 0; i < 5; i++ {
+			analyzer.checkBanRules(ip, 401, "log", "sip")
+		}
+	}
+
+	// 验证所有IP都被封禁
+	bannedIPs := mockFW.getBannedIPs()
+	if len(bannedIPs) != len(testIPs) {
+		t.Errorf("应该封禁 %d 个IP，实际封禁了 %d 个", len(testIPs), len(bannedIPs))
+	}
+
+	// 验证每个IP都在bannedIPs映射中
+	for _, ip := range testIPs {
+		if _, exists := analyzer.bannedIPs.Load(ip); !exists {
+			t.Errorf("IP %s 应该在bannedIPs映射中", ip)
+		}
+	}
+}
+
+// TestAnalyzer_CheckBanRules_DifferentResponseCodes 测试不同响应码的封禁规则
+func TestAnalyzer_CheckBanRules_DifferentResponseCodes(t *testing.T) {
+	rule401 := &BanRule{
+		FindTime: 60,
+		MaxRetry: 2,
+	}
+
+	rule403 := &BanRule{
+		FindTime: 120,
+		MaxRetry: 5,
+	}
+
+	mockFW := &mockFirewall{
+		bannedIPs: []string{},
+		banErrors: map[string]error{},
+	}
+
+	analyzer := &Analyzer{
+		cache: cache.New(5*time.Minute, 10*time.Minute),
+		banRuleCode: map[int]*BanRule{
+			401: rule401,
+			403: rule403,
+		},
+		firewall: mockFW,
+	}
+
+	testIP := "192.168.3.1"
+
+	// 401响应码调用4次（超过MaxRetry=2）
+	for i := 0; i < 4; i++ {
+		analyzer.checkBanRules(testIP, 401, "log", "sip")
+	}
+
+	// 验证IP被封禁
+	bannedIPs := mockFW.getBannedIPs()
+	if len(bannedIPs) != 1 {
+		t.Errorf("应该封禁1个IP，实际封禁了 %d 个", len(bannedIPs))
+	}
+
+	// 403响应码调用3次（未超过MaxRetry=5）
+	// 由于IP已经被封禁，不应该再次调用Ban
+	for i := 0; i < 3; i++ {
+		analyzer.checkBanRules(testIP, 403, "log", "sip")
+	}
+
+	// 验证Ban方法只被调用了一次
+	banCalls := mockFW.getBanCalls()
+	if banCalls != 1 {
+		t.Errorf("Ban方法应该只被调用1次，实际调用了 %d 次", banCalls)
+	}
+}
+
+// TestAnalyzer_CheckBanRules_ConcurrentAccess 测试并发访问的线程安全性
+func TestAnalyzer_CheckBanRules_ConcurrentAccess(t *testing.T) {
+	rule := &BanRule{
+		FindTime: 60,
+		MaxRetry: 10,
+	}
+
+	mockFW := &mockFirewall{
+		bannedIPs: []string{},
+		banErrors: map[string]error{},
+	}
+
+	analyzer := &Analyzer{
+		cache: cache.New(5*time.Minute, 10*time.Minute),
+		banRuleCode: map[int]*BanRule{
+			401: rule,
+		},
+		firewall: mockFW,
+	}
+
+	testIP := "192.168.4.1"
+	var wg sync.WaitGroup
+
+	// 启动多个goroutine并发调用checkBanRules
+	numGoroutines := 20
+	callsPerGoroutine := 5
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < callsPerGoroutine; j++ {
+				analyzer.checkBanRules(testIP, 401, "log", "sip")
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// 验证IP被封禁（总调用次数100次，远超MaxRetry=10）
+	bannedIPs := mockFW.getBannedIPs()
+	if len(bannedIPs) != 1 {
+		t.Errorf("应该封禁1个IP，实际封禁了 %d 个", len(bannedIPs))
+	}
+
+	// 验证Ban方法只被调用了一次（去重机制生效）
+	banCalls := mockFW.getBanCalls()
+	if banCalls != 1 {
+		t.Errorf("Ban方法应该只被调用1次，实际调用了 %d 次", banCalls)
+	}
+}
+
+// mockGeoChecker 模拟地理位置检查器
+type mockGeoChecker struct {
+	results map[string]geoResult
+}
+
+type geoResult struct {
+	isChina bool
+	country string
+}
+
+// IsChina 模拟地理位置检查
+func (m *mockGeoChecker) IsChina(ip string) (bool, string) {
+	if result, exists := m.results[ip]; exists {
+		return result.isChina, result.country
+	}
+	// 默认返回中国
+	return true, "中国"
+}
+
+// TestAnalyzer_CheckGeoIP_ActualBan 测试地理位置检查触发的封禁
+func TestAnalyzer_CheckGeoIP_ActualBan(t *testing.T) {
+	mockFW := &mockFirewall{
+		bannedIPs: []string{},
+		banErrors: map[string]error{},
+	}
+
+	// 创建一个返回非中国的mock checker
+	mockChecker := &mockGeoChecker{
+		results: map[string]geoResult{
+			"8.8.8.8": {isChina: false, country: "美国"},
+		},
+	}
+
+	analyzer := &Analyzer{
+		geoChecker: mockChecker,
+		firewall:   mockFW,
+		cache:      cache.New(5*time.Minute, 10*time.Minute),
+	}
+
+	// 检查非中国IP
+	result := analyzer.checkGeoIP("8.8.8.8", "log", "sip")
+
+	// 验证返回false（被封禁）
+	if result {
+		t.Error("非中国IP应该返回false")
+	}
+
+	// 验证IP被封禁
+	bannedIPs := mockFW.getBannedIPs()
+	if len(bannedIPs) != 1 {
+		t.Errorf("应该封禁1个IP，实际封禁了 %d 个", len(bannedIPs))
+	}
+
+	if len(bannedIPs) > 0 && bannedIPs[0] != "8.8.8.8" {
+		t.Errorf("封禁的IP = %v, want 8.8.8.8", bannedIPs[0])
+	}
+}

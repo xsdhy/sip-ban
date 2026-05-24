@@ -145,3 +145,53 @@ func TestConfigStructure(t *testing.T) {
 		t.Error("FilterPort字段赋值失败")
 	}
 }
+
+// TestLoadFromFlagSet 验证 LoadFromFlagSet 在独立 FlagSet 上的行为：
+//   - 不污染 flag.CommandLine；
+//   - 可以叠加额外的自定义 flag（模拟 start 子命令叠加 -pid / -log）。
+func TestLoadFromFlagSet(t *testing.T) {
+	// 独立的 FlagSet，与 flag.CommandLine 完全隔离
+	fs := flag.NewFlagSet("start", flag.ContinueOnError)
+
+	// 调用方先注册自己的 flag
+	var pidPath string
+	fs.StringVar(&pidPath, "pid", "", "PID 文件路径")
+
+	args := []string{
+		"-i", "eth1",
+		"-P", "5061",
+		"-pid", "/tmp/sip-ban.pid",
+	}
+
+	cfg, err := LoadFromFlagSet(fs, args)
+	if err != nil {
+		t.Fatalf("LoadFromFlagSet 不应失败: %v", err)
+	}
+
+	if cfg.DeviceName != "eth1" {
+		t.Errorf("DeviceName = %q, want %q", cfg.DeviceName, "eth1")
+	}
+	if cfg.FilterPort != 5061 {
+		t.Errorf("FilterPort = %d, want 5061", cfg.FilterPort)
+	}
+	if pidPath != "/tmp/sip-ban.pid" {
+		t.Errorf("pidPath = %q, want /tmp/sip-ban.pid", pidPath)
+	}
+}
+
+// TestLoadFromFlagSetUnknownFlag 验证传入未知 flag 时返回错误，而不是 panic / 退出。
+func TestLoadFromFlagSetUnknownFlag(t *testing.T) {
+	fs := flag.NewFlagSet("start", flag.ContinueOnError)
+	// 关闭 usage 噪音输出，让测试干净
+	fs.SetOutput(devNull{})
+
+	_, err := LoadFromFlagSet(fs, []string{"-unknown-flag", "value"})
+	if err == nil {
+		t.Fatal("LoadFromFlagSet 在遇到未知 flag 时应返回错误")
+	}
+}
+
+// devNull 实现 io.Writer，用于丢弃 flag 包的 usage 输出。
+type devNull struct{}
+
+func (devNull) Write(p []byte) (int, error) { return len(p), nil }

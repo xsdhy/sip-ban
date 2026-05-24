@@ -1,5 +1,6 @@
 # Binaries
 bin/
+sip-ban
 *.exe
 *.exe~
 *.dll
@@ -11,6 +12,14 @@ bin/
 
 # Output of the go coverage tool
 *.out
+coverage.html
+coverage.txt
+
+# Profiling files
+*.prof
+*.pprof
+*.cpu
+*.mem
 
 # IDE
 .idea/
@@ -26,3 +35,35 @@ data/*.ipdb
 
 # Logs
 *.log
+
+# Runtime files
+*.pid
+*.lock
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build artifacts
+dist/
+release/
+
+# OS specific
+Thumbs.db
+.Spotlight-V100
+.Trashes
+
+# Go workspace
+go.work
+go.work.sum
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Backup files
+*.bak
+*.backup
+*~
