@@ -14,7 +14,7 @@ jobs:
     strategy:
       matrix:
         goos: [linux]
-        goarch: [amd64, arm64]
+        goarch: [amd64]
     steps:
       - uses: actions/checkout@v4
 
@@ -24,15 +24,7 @@ jobs:
           go-version: '1.23'
 
       - name: Install libpcap-dev
-        run: |
-          sudo apt-get update
-          if [ "${{ matrix.goarch }}" = "arm64" ]; then
-            sudo dpkg --add-architecture arm64
-            sudo apt-get update
-            sudo apt-get install -y libpcap-dev:arm64
-          else
-            sudo apt-get install -y libpcap-dev
-          fi
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
 
       - name: Get version from tag
         id: version
@@ -53,10 +45,6 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
         run: |
-          if [ "${{ matrix.goarch }}" = "arm64" ]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu
-            export CC=aarch64-linux-gnu-gcc
-          fi
           mkdir -p dist
           go clean -cache
           go build -a -ldflags "-s -w -X main.Version=${{ steps.version.outputs.VERSION }}" \
