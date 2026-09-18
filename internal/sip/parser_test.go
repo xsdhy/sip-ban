@@ -242,3 +242,27 @@ WWW-Authenticate: Digest realm="example.com"
 		t.Errorf("WWW-Authenticate header不匹配")
 	}
 }
+
+func TestPackageDecodeFromBytes_CompactCallIDAndNoTrailingNewline(t *testing.T) {
+	msg := "INVITE sip:bob@example.com SIP/2.0\r\n" +
+		"i: compact-call-id\r\n" +
+		"CSeq: 1 INVITE"
+
+	pkg := &Package{}
+	if err := pkg.DecodeFromBytes([]byte(msg)); err != nil {
+		t.Fatalf("DecodeFromBytes() error = %v", err)
+	}
+	if pkg.RequestURI != "sip:bob@example.com" {
+		t.Fatalf("RequestURI = %q", pkg.RequestURI)
+	}
+	if pkg.GetCallID() != "compact-call-id" {
+		t.Fatalf("Call-ID = %q", pkg.GetCallID())
+	}
+}
+
+func TestPackageDecodeFromBytes_RejectsWrongVersion(t *testing.T) {
+	msg := "INVITE sip:bob@example.com HTTP/1.1\r\nCall-ID: test\r\n\r\n"
+	if err := (&Package{}).DecodeFromBytes([]byte(msg)); err == nil {
+		t.Fatal("expected wrong SIP version to be rejected")
+	}
+}

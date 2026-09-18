@@ -145,3 +145,15 @@ func TestConfigStructure(t *testing.T) {
 		t.Error("FilterPort字段赋值失败")
 	}
 }
+
+func TestConfigValidate(t *testing.T) {
+	valid := &Config{Protocol: "udp", FilterPort: 5060, RegisterFindTime: 1, RegisterMaxRetry: 0, InviteFindTime: 1, InviteMaxRetry: 0}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid config rejected: %v", err)
+	}
+	invalid := *valid
+	invalid.FilterPort = 70000
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("invalid port should be rejected")
+	}
+}

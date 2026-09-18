@@ -4,8 +4,8 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"sync"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/pcap"
@@ -21,17 +21,23 @@ import (
 func main() {
 	// 加载配置
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		fmt.Printf("配置错误: %s\n", err)
+		return
+	}
 
 	// 初始化防火墙管理器
 	fw, err := firewall.New()
 	if err != nil {
 		fmt.Printf("警告: Iptables初始化失败: %s\n", err)
+		fw = nil
 	}
 
 	// 初始化IP地理位置检查器
 	geoChecker, err := geoip.New(cfg.IPDBPath)
 	if err != nil {
-		fmt.Printf("警告: IP数据库加载失败: %s\n", err)
+		fmt.Printf("警告: IP数据库加载失败: %s；地理过滤已停用\n", err)
+		geoChecker = nil
 	}
 
 	// 配置基于SIP方法的封禁规则
@@ -58,24 +64,32 @@ func main() {
 
 	// 启动网络包捕获
 	wg := &sync.WaitGroup{}
-	startCapture(cfg, geoChecker, fw, banRules, banRuleCodes, wg)
+	if err := startCapture(cfg, geoChecker, fw, banRules, banRuleCodes, wg); err != nil {
+		fmt.Printf("启动抓包失败: %s\n", err)
+		return
+	}
 	wg.Wait()
 }
 
 // startCapture 扫描网卡并启动流量捕获
 // 参数:
-//   cfg - 配置对象
-//   geoChecker - IP地理位置检查器
-//   fw - 防火墙管理器
-//   banRules - 基于SIP方法的封禁规则
-//   banRuleCodes - 基于响应码的封禁规则
-//   wg - 等待组，用于协程同步
-func startCapture(cfg *config.Config, geoChecker *geoip.Checker, fw *firewall.Manager, banRules map[string]*analyzer.BanRule, banRuleCodes map[int]*analyzer.BanRule, wg *sync.WaitGroup) {
+//
+//	cfg - 配置对象
+//	geoChecker - IP地理位置检查器
+//	fw - 防火墙管理器
+//	banRules - 基于SIP方法的封禁规则
+//	banRuleCodes - 基于响应码的封禁规则
+//	wg - 等待组，用于协程同步
+func startCapture(cfg *config.Config, geoChecker *geoip.Checker, fw *firewall.Manager, banRules map[string]*analyzer.BanRule, banRuleCodes map[int]*analyzer.BanRule, wg *sync.WaitGroup) error {
+	if cfg == nil || wg == nil {
+		return fmt.Errorf("nil capture configuration")
+	}
 	devices, err := pcap.FindAllDevs()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
+	started := false
 	// 遍历所有网卡设备
 	for _, device := range devices {
 		if len(device.Addresses) == 0 {
@@ -92,22 +106,31 @@ func startCapture(cfg *config.Config, geoChecker *geoip.Checker, fw *firewall.Ma
 				// 为每个网卡启动一个协程进行捕获
 				wg.Add(1)
 				go captureDevice(cfg, device.Name, address.IP.String(), geoChecker, fw, banRules, banRuleCodes, wg)
+				started = true
 				break
 			}
 		}
 	}
+	if !started {
+		if cfg.DeviceName != "" {
+			return fmt.Errorf("网卡 %q 不存在或没有 IPv4 地址", cfg.DeviceName)
+		}
+		return fmt.Errorf("没有找到带 IPv4 地址的网卡")
+	}
+	return nil
 }
 
 // captureDevice 在指定网卡上捕获和分析流量
 // 参数:
-//   cfg - 配置对象
-//   deviceName - 网卡名称
-//   deviceIP - 网卡IP地址
-//   geoChecker - IP地理位置检查器
-//   fw - 防火墙管理器
-//   banRules - 基于SIP方法的封禁规则
-//   banRuleCodes - 基于响应码的封禁规则
-//   wg - 等待组
+//
+//	cfg - 配置对象
+//	deviceName - 网卡名称
+//	deviceIP - 网卡IP地址
+//	geoChecker - IP地理位置检查器
+//	fw - 防火墙管理器
+//	banRules - 基于SIP方法的封禁规则
+//	banRuleCodes - 基于响应码的封禁规则
+//	wg - 等待组
 func captureDevice(cfg *config.Config, deviceName, deviceIP string, geoChecker *geoip.Checker, fw *firewall.Manager, banRules map[string]*analyzer.BanRule, banRuleCodes map[int]*analyzer.BanRule, wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -115,24 +138,48 @@ func captureDevice(cfg *config.Config, deviceName, deviceIP string, geoChecker *
 
 	// 打开网卡进行实时捕获
 	// 参数: 设备名, 快照长度, 混杂模式, 超时时间
-	handle, err := pcap.OpenLive(deviceName, 1024, false, pcap.BlockForever)
+	handle, err := pcap.OpenLive(deviceName, 65535, false, time.Second)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Printf("打开网卡 %s 失败: %s\n", deviceName, err)
+		return
 	}
 	defer handle.Close()
 
 	// 设置BPF过滤器，只捕获指定协议和端口的流量
 	if err := handle.SetBPFFilter(fmt.Sprintf("%s and port %d", cfg.Protocol, cfg.FilterPort)); err != nil {
-		log.Fatal(err)
+		fmt.Printf("设置网卡 %s 过滤器失败: %s\n", deviceName, err)
+		return
 	}
 
 	// 创建流量分析器
 	a := analyzer.New(cfg.Protocol, deviceIP, deviceName, geoChecker, fw, banRules, banRuleCodes)
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-
-	// 持续处理捕获到的数据包
-	for packet := range packetSource.Packets() {
-		// 每个数据包在独立的协程中分析，提高并发性能
-		go a.AnalyzePacket(packet)
+	if cfg.Protocol == "tcp" {
+		assembler := analyzer.NewTCPAssembler(a)
+		for packet := range packetSource.Packets() {
+			assembler.Assemble(packet)
+		}
+		assembler.Flush()
+		return
 	}
+
+	// Use a bounded worker pool so a traffic burst cannot create an unbounded
+	// number of goroutines and exhaust the process.
+	jobs := make(chan gopacket.Packet, 256)
+	workers := 8
+	var workerWG sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		workerWG.Add(1)
+		go func() {
+			defer workerWG.Done()
+			for packet := range jobs {
+				a.AnalyzePacket(packet)
+			}
+		}()
+	}
+	for packet := range packetSource.Packets() {
+		jobs <- packet
+	}
+	close(jobs)
+	workerWG.Wait()
 }

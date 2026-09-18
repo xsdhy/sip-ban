@@ -1,7 +1,11 @@
 // Package config 提供配置管理功能，负责解析命令行参数并生成配置对象
 package config
 
-import "flag"
+import (
+	"flag"
+	"fmt"
+	"strings"
+)
 
 // Config 配置结构体，包含所有运行时配置参数
 type Config struct {
@@ -39,6 +43,28 @@ func Load() *Config {
 	flag.IntVar(&cfg.InviteMaxRetry, "in", 10, "Invite-MaxRetry")
 	flag.StringVar(&cfg.IPDBPath, "ipdb", "./data/ipv4.ipdb", "IP数据库路径")
 	flag.Parse()
+	cfg.Protocol = strings.ToLower(strings.TrimSpace(cfg.Protocol))
 
 	return cfg
+}
+
+// Validate checks values which would otherwise produce an invalid BPF filter
+// or a cache rule that expires immediately.
+func (c *Config) Validate() error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if c.Protocol != "udp" && c.Protocol != "tcp" {
+		return fmt.Errorf("unsupported protocol %q (use tcp or udp)", c.Protocol)
+	}
+	if c.FilterPort < 1 || c.FilterPort > 65535 {
+		return fmt.Errorf("invalid port %d", c.FilterPort)
+	}
+	if c.RegisterFindTime <= 0 || c.InviteFindTime <= 0 {
+		return fmt.Errorf("find time must be positive")
+	}
+	if c.RegisterMaxRetry < 0 || c.InviteMaxRetry < 0 {
+		return fmt.Errorf("max retry must not be negative")
+	}
+	return nil
 }

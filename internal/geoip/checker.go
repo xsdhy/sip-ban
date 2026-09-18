@@ -10,10 +10,13 @@ type Checker struct {
 
 // New 创建一个新的IP地理位置检查器
 // 参数:
-//   dbPath - IP数据库文件路径
+//
+//	dbPath - IP数据库文件路径
+//
 // 返回:
-//   *Checker - 检查器实例
-//   error - 数据库加载失败时返回错误
+//
+//	*Checker - 检查器实例
+//	error - 数据库加载失败时返回错误
 func New(dbPath string) (*Checker, error) {
 	db, err := ipdb.NewCity(dbPath)
 	if err != nil {
@@ -24,19 +27,25 @@ func New(dbPath string) (*Checker, error) {
 
 // IsChina 检查IP地址是否属于中国
 // 参数:
-//   ip - 要检查的IP地址字符串
+//
+//	ip - 要检查的IP地址字符串
+//
 // 返回:
-//   bool - true表示是中国IP或局域网IP，false表示非中国IP
-//   string - 国家/地区名称
+//
+//	bool - true表示是中国IP或局域网IP，false表示非中国IP
+//	string - 国家/地区名称
 func (c *Checker) IsChina(ip string) (bool, string) {
-	if c.db == nil {
+	// A missing database is an expected deployment condition (the database is
+	// distributed separately).  Treat a disabled checker as "unknown" and
+	// allow the caller to continue without dereferencing a nil checker.
+	if c == nil || c.db == nil {
 		return true, ""
 	}
 
 	info, err := c.db.FindInfo(ip, "CN")
 	if err != nil {
-		// 查询失败时默认放行
-		return true, ""
+		// A lookup failure must not silently bypass the geographic policy.
+		return false, "未知"
 	}
 
 	switch info.CountryName {

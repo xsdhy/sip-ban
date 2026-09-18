@@ -3,18 +3,22 @@ package firewall
 
 import (
 	"fmt"
+	"net"
 	"sip-ban/pkg/iptables"
+	"sync"
 )
 
 // Manager 防火墙管理器
 type Manager struct {
 	ipt *iptables.IPTables // iptables操作实例
+	mu  sync.Mutex         // serializes check-and-append operations
 }
 
 // New 创建一个新的防火墙管理器
 // 返回:
-//   *Manager - 管理器实例
-//   error - 初始化失败时返回错误
+//
+//	*Manager - 管理器实例
+//	error - 初始化失败时返回错误
 func New() (*Manager, error) {
 	ipt, err := iptables.New()
 	if err != nil {
@@ -26,13 +30,24 @@ func New() (*Manager, error) {
 // Ban 封禁指定IP地址
 // 在iptables的INPUT链中添加DROP规则，阻止来自该IP的所有流量
 // 参数:
-//   ip - 要封禁的IP地址
+//
+//	ip - 要封禁的IP地址
+//
 // 返回:
-//   error - 操作失败时返回错误
+//
+//	error - 操作失败时返回错误
 func (m *Manager) Ban(ip string) error {
-	if m.ipt == nil {
+	if m == nil || m.ipt == nil {
 		return fmt.Errorf("iptables not initialized")
 	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() == nil {
+		return fmt.Errorf("invalid IPv4 address: %q", ip)
+	}
+	ip = parsed.To4().String()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	// 构造iptables规则: -s <ip> -j DROP
 	rule := []string{"-s", ip, "-j", "DROP"}

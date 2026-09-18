@@ -28,6 +28,13 @@ func TestChecker_NilDB(t *testing.T) {
 	}
 }
 
+func TestChecker_NilReceiver(t *testing.T) {
+	var checker *Checker
+	if isChina, _ := checker.IsChina("8.8.8.8"); !isChina {
+		t.Fatal("nil checker should be safely disabled")
+	}
+}
+
 // TestChecker_InvalidIP 测试无效IP地址
 func TestChecker_InvalidIP(t *testing.T) {
 	// 由于没有真实的数据库文件，我们创建一个nil checker来测试
